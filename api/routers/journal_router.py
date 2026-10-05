@@ -90,7 +90,14 @@ async def get_entry(entry_id: str, entry_service: EntryServiceDependency) -> Ent
     #
     # Hint: Check the update_entry endpoint for similar patterns.
     # See docs/04-get-entry.md for the exercise walkthrough.
-    raise HTTPException(status_code=501, detail="Not implemented - complete this endpoint!")
+    # 8af85d99-5017-4f9d-8a7b-6fe1a8019a1a
+    result = await entry_service.get_entry(entry_id)
+    # if result is not None:
+    if result is None:
+        raise HTTPException(status_code=404, detail="Entry does not exist")
+
+    # raise HTTPException(status_code=501, detail="Not implemented - complete this endpoint!")
+    return result
 
 
 @router.patch("/entries/{entry_id}")
@@ -106,10 +113,10 @@ async def update_entry(
     # would overwrite omitted fields with their defaults.
     # An empty object is allowed and leaves the text fields unchanged.
     # See ``TestUpdateEntry`` in tests/test_api.py and docs/06-input-validation.md.
+    # 8af85d99-5017-4f9d-8a7b-6fe1a8019a1a
     result = await entry_service.update_entry(entry_id, entry_update)
     if result is None:
         raise HTTPException(status_code=404, detail="Entry not found")
-
     return result
 
 
