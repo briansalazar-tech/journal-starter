@@ -1,0 +1,8 @@
+# Reviewed gitleaks findings that are accepted (one fingerprint per line:
+# <commit>:<file>:<rule>:<line>). Only add entries after reviewing them.
+#
+# Application Insights instrumentation keys committed upstream in the Learn to
+# Cloud template (Feb 2025) and already removed from the current files. They
+# only allow sending telemetry and are not this project's credentials.
+f95f5904c150c3d3b3902ab4e4958a84902b4e29:README.md:generic-api-key:209
+b3aa0d4ea38a7fdca785908a371dfb9a5d0a7ae7:.vscode/launch.json:generic-api-key:19

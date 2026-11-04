@@ -1,0 +1,32 @@
+# Keep the build context small and keep secrets out of the image.
+
+# Secrets / local config
+.env
+.env.*
+!.env-sample
+
+# Environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# VCS, editor and dev tooling
+.git/
+.github/
+.devcontainer/
+.vscode/
+.idea/
+.pre-commit-config.yaml
+
+# Not needed at runtime
+tests/
+docs/
+scripts/
+*.md
+database_setup*.sql
+Dockerfile
+.dockerignore

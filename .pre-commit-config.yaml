@@ -6,3 +6,10 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  # Block commits that contain credentials (API keys, connection strings, tokens).
+  # Scans only the staged changes; findings are redacted in the output.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
