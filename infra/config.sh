@@ -111,11 +111,23 @@ NSG_ADMIN="nsg-${PROJECT}-${ENV_NAME}-admin"
 PG_DNS_ZONE="${PROJECT}-${ENV_NAME}.private.postgres.database.azure.com"
 
 # ---------------------------------------------------------------------------
-# Names reserved for later phases (nothing creates these yet)
+# Phase 2: identity and secrets
 # ---------------------------------------------------------------------------
 
 KEY_VAULT="kv-${PROJECT}-${ENV_NAME}-${SUFFIX}"
+KV_SOFT_DELETE_DAYS=7       # minimum; frees the name a week after teardown
 APP_IDENTITY="id-${PROJECT}-${ENV_NAME}-app"
+
+# Secret names in Key Vault. Values are generated or prompted for, never stored here.
+SECRET_PG_ADMIN_PASSWORD="pg-admin-password"   # server admin login (phase 3)
+SECRET_PG_APP_PASSWORD="pg-app-password"       # least-privilege journal_app role (phase 4)
+SECRET_OPENAI_API_KEY="openai-api-key"         # Foundry key for /analyze (phase 6)
+SECRET_DATABASE_URL="database-url"             # assembled in phase 4, read by the app
+
+# ---------------------------------------------------------------------------
+# Names reserved for later phases (nothing creates these yet)
+# ---------------------------------------------------------------------------
+
 PG_SERVER="psql-${PROJECT}-${ENV_NAME}-${SUFFIX}"
 PG_DATABASE="career_journal"
 JUMPBOX_VM="vm-${PROJECT}-${ENV_NAME}-admin"
