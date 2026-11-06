@@ -33,8 +33,8 @@ Every script prints the subscription, region and action, then asks before it cha
 | 0 | [00-budget.sh](00-budget.sh) | Resource group, plus a $40/month budget on it with email alerts at 50%, 80% and 100% of actual spend and 100% of forecast | Free |
 | 1 | [01-foundation.sh](01-foundation.sh) | Provider registrations, Log Analytics (0.15 GB/day cap), 3 NSGs, VNet and 3 subnets, Postgres private DNS zone | About $0.50/month (the DNS zone) |
 | 2 | [02-secrets.sh](02-secrets.sh) | Key Vault (RBAC, with audit logs), the app's managed identity, generated database passwords, Foundry key | About $0.10/month |
-| 3 | *next* | PostgreSQL Flexible Server (B1ms, private access) | About $16/month |
-| 4 | *planned* | Jumpbox VM and Bastion; schema and least-privilege app role | About $0 to $2.50/month |
+| 3 | [03-database.sh](03-database.sh), [templates/postgres.bicep](templates/postgres.bicep) | PostgreSQL 17 Flexible Server (B1ms, private access only), `career_journal` database, you as Entra admin | About $16/month |
+| 4 | *next* | Jumpbox VM and Bastion; schema and least-privilege app role | About $0 to $2.50/month |
 | 5 | *planned* | Container Registry; image build | About $5/month |
 | 6 | *planned* | Container Apps environment and app | About $4 to $14/month |
 | 99 | [99-teardown.sh](99-teardown.sh) | Deletes the resource group and everything in it | — |
@@ -120,6 +120,96 @@ az keyvault secret show --vault-name "$KV" -n pg-admin-password --query "length(
 - You see three secret names (two if you skipped the Foundry key).
 - Each password length prints as `32`.
 - Your shell history doesn't contain any of the secret values.
+
+## Phase 3: database tier
+
+```bash
+./infra/03-database.sh
+```
+
+**Billing starts in this phase: about $16/month until you tear it down.** The deployment takes 5–15 minutes. To watch it, open the portal and go to **rg-journal-dev → Deployments**.
+
+How the script keeps the admin password private:
+- The template's parameters file holds only a reference to the `pg-admin-password` secret. Azure Resource Manager fetches the value from Key Vault itself, so it never passes through your shell.
+- The template marks that parameter `@secure()`, which keeps it out of deployment history.
+- For the reference to work, the script turns on the vault's "enabled for template deployment" setting.
+
+Private access is fixed when the server is created and can't be changed later.
+
+### Verify phase 3
+
+```bash
+export MSYS_NO_PATHCONV=1   # Git Bash only; see Prerequisites
+
+PG=$(az postgres flexible-server list -g rg-journal-dev --query "[0].name" -o tsv)
+FQDN=$(az postgres flexible-server show -g rg-journal-dev -n "$PG" --query fullyQualifiedDomainName -o tsv)
+
+# Ready, private access only, B1ms, 7-day backups, Entra auth on
+az postgres flexible-server show -g rg-journal-dev -n "$PG" \
+  --query "{state:state, version:version, sku:sku.name, publicNetworkAccess:network.publicNetworkAccess, backupDays:backup.backupRetentionDays, entraAuth:authConfig.activeDirectoryAuth, passwordAuth:authConfig.passwordAuth}"
+
+# The server's only address is a private IP in snet-db, registered in the private DNS zone
+az network private-dns record-set a list -g rg-journal-dev -z journal-dev.private.postgres.database.azure.com \
+  --query "[].{name:name, ip:aRecords[0].ipv4Address}" -o table
+
+# TLS is required for every connection
+az postgres flexible-server parameter show -g rg-journal-dev -s "$PG" -n require_secure_transport --query value -o tsv
+
+# The app database exists, and you are the Entra admin
+az postgres flexible-server db list -g rg-journal-dev -s "$PG" --query "[].name" -o tsv
+az postgres flexible-server microsoft-entra-admin list -g rg-journal-dev -s "$PG" --query "[].principalName" -o tsv
+
+# Requirement #2, from your laptop (outside the VNet): no public address, no connection
+nslookup "$FQDN"
+timeout 5 bash -c "</dev/tcp/$FQDN/5432" 2>/dev/null && echo "REACHABLE from the internet (bad)" || echo "Not reachable from the internet (expected)"
+```
+
+**Expected results:**
+- The server shows `state` `Ready`, `version` `17`, `sku` `Standard_B1ms`, `publicNetworkAccess` `Disabled`, and `backupDays` `7`. Both `entraAuth` and `passwordAuth` are `Enabled`.
+- There's one A record pointing at `10.20.1.x`, which is inside `snet-db`.
+- `require_secure_transport` is `on`.
+- The database list includes `career_journal`. The others (`postgres`, `azure_maintenance`, `azure_sys`) are created by Azure.
+- The Entra admin is your `...#EXT#@...onmicrosoft.com` name.
+- `nslookup` returns only an alias ending in `.private.postgres.database.azure.com`, with no public IP address, and the connection test prints "Not reachable from the internet (expected)".
+
+If the deployment fails only on the Entra admin step, re-run it with `PG_ENTRA_ADMIN=0 ./infra/03-database.sh`. Phase 4 will then sign in with the password admin instead.
+
+### If PostgreSQL isn't available in your region
+
+The error `SkuNotAvailable: Specified SKU is not supported in this region` means Azure won't allocate that size to *your subscription* in that region right now. This can happen even when `az postgres flexible-server list-skus` lists the size and your quota is fine.
+
+After a failed attempt, Azure deletes the partly created server; the portal shows it as **Dropping**. The name stays reserved until that finishes, which can take several minutes. Trying again before then fails with `ServerNameAlreadyExists`, so the script waits for the name to be released before each new attempt.
+
+1. **Try other zones.** The script already tries zones 1, 2 and 3 (the `PG_ZONES` setting). Capacity sometimes differs by zone.
+2. **Request access (free).** In the portal, go to **Help + support → Create a support request → Service and subscription limits (quotas)**. Choose **Azure Database for PostgreSQL Flexible Server**, then ask for region access to Burstable in your region. Then re-run phase 3.
+3. **Move to another region.** The server must be in the same region as the VNet, so phases 0–2 have to be rebuilt there. They're free and take a few minutes.
+
+   First check that the new region will accept the server, using a throwaway one. It costs a few cents. If the create fails with `SkuNotAvailable`, delete the test group and try another region.
+
+   ```bash
+   az group create -n rg-pgtest -l centralus -o none
+   az postgres flexible-server create -g rg-pgtest -n psql-pgtest-<suffix> -l centralus \
+     --tier Burstable --sku-name Standard_B1ms --storage-size 32 --version 17 \
+     --public-access None --yes -o none
+   az group delete -n rg-pgtest --yes --no-wait
+   ```
+
+   Then rebuild:
+
+   ```bash
+   ./infra/99-teardown.sh                    # deletes rg-journal-dev
+   az group wait --deleted --resource-group rg-journal-dev
+   # Change LOCATION="${LOCATION:-eastus2}" in infra/config.sh to the new region,
+   # so every later run uses it.
+   ./infra/00-budget.sh
+   ./infra/01-foundation.sh
+   ./infra/02-secrets.sh                     # recovers the soft-deleted vault with its secrets
+   ./infra/03-database.sh
+   ```
+
+   Run phase 2 within 7 days of the teardown. After that, Azure purges the soft-deleted vault and its secrets.
+
+   The recovered Key Vault stays in its original region. That's fine: the app reaches it over Azure's network using its managed identity, not through the VNet.
 
 ## Credentials
 

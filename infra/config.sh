@@ -58,7 +58,7 @@ SUBSCRIPTION_NAME="$(az_tsv account show --query name)"
 
 PROJECT="${PROJECT:-journal}"
 ENV_NAME="${ENV_NAME:-dev}"
-LOCATION="${LOCATION:-eastus2}"
+LOCATION="${LOCATION:-centralus}"
 
 # Short, stable suffix for names that must be globally unique (Key Vault,
 # Container Registry, PostgreSQL). Same subscription + project + env always
@@ -125,11 +125,29 @@ SECRET_OPENAI_API_KEY="openai-api-key"         # Foundry key for /analyze (phase
 SECRET_DATABASE_URL="database-url"             # assembled in phase 4, read by the app
 
 # ---------------------------------------------------------------------------
-# Names reserved for later phases (nothing creates these yet)
+# Phase 3: database tier
 # ---------------------------------------------------------------------------
 
 PG_SERVER="psql-${PROJECT}-${ENV_NAME}-${SUFFIX}"
 PG_DATABASE="career_journal"
+PG_VERSION="${PG_VERSION:-17}"
+PG_SKU="${PG_SKU:-Standard_B1ms}"           # Burstable, 1 vCore, 2 GiB, ~$12.40/month
+PG_TIER="${PG_TIER:-Burstable}"
+PG_STORAGE_GB="${PG_STORAGE_GB:-32}"        # smallest size, ~$3.70/month
+PG_BACKUP_DAYS="${PG_BACKUP_DAYS:-7}"       # point-in-time restore window; storage up to the server size is free
+# Availability zones to try, in order, when Azure reports SkuNotAvailable.
+# Letting Azure choose failed twice in eastus2, so pin zones explicitly.
+# "any" means no preference. The Container App doesn't need to match.
+PG_ZONES="${PG_ZONES:-1 2 3}"
+PG_ADMIN_USER="journaladmin"                # password-auth server admin (password in Key Vault)
+# 1 = make the signed-in Azure user the server's Microsoft Entra admin, so
+# phase 4 can sign in with an Entra token instead of the admin password.
+PG_ENTRA_ADMIN="${PG_ENTRA_ADMIN:-1}"
+
+# ---------------------------------------------------------------------------
+# Names reserved for later phases (nothing creates these yet)
+# ---------------------------------------------------------------------------
+
 JUMPBOX_VM="vm-${PROJECT}-${ENV_NAME}-admin"
 ACR="acr${PROJECT}${ENV_NAME}${SUFFIX}"
 ACA_ENV="cae-${PROJECT}-${ENV_NAME}"
