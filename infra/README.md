@@ -7,6 +7,8 @@ Phased Azure CLI scripts that deploy the Journal API as two tiers:
 
 Run one phase at a time and check its results before moving on.
 
+To build the same thing by hand, [PORTAL-GUIDE.md](PORTAL-GUIDE.md) walks through each phase in the Azure portal, using the same names and settings.
+
 ```text
 Internet ──HTTPS──► Container Apps env (snet-app 10.20.0.0/24)
                          │ TCP 5432, TLS
