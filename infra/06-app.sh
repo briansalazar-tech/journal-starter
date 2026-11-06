@@ -24,7 +24,9 @@
 #
 # Image: the newest tag in the registry, or set IMAGE_TAG=<tag>.
 # WHAT_IF=1 previews the deployment and changes nothing.
-# Cost: ~$4-14/month (one 0.25 vCPU / 0.5 GiB replica, always on).
+# Cost: ~$26-36/month: ~$4-14 for one always-on 0.25 vCPU / 0.5 GiB replica,
+# plus $21.90 for the Standard load balancer and public IP that a VNet-integrated
+# environment adds (in its ME_ managed resource group, billed to you).
 # Safe to re-run; re-running with a new image tag rolls out a new revision.
 
 # shellcheck source=config.sh
@@ -74,7 +76,7 @@ echo "AI provider  : ${OPENAI_BASE_URL}, model ${OPENAI_MODEL}"
 if [[ $WHAT_IF == 1 ]]; then
   echo "Mode         : WHAT_IF=1, preview only; nothing changes"
 else
-  echo "Cost         : ~\$4-14/month while the app exists (always-on replica)"
+  echo "Cost         : ~\$26-36/month while the app exists (replica + the environment's load balancer and IP)"
   confirm "create the Container Apps environment and app in ${RG} (takes 5-10 minutes)"
 fi
 

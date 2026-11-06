@@ -36,7 +36,7 @@ Every script prints the subscription, region and action, then asks before it cha
 | 3 | [03-database.sh](03-database.sh), [templates/postgres.bicep](templates/postgres.bicep) | PostgreSQL 17 Flexible Server (B1ms, private access only), `career_journal` database, you as Entra admin | About $17.70/month |
 | 4 | [04-admin.sh](04-admin.sh), [remote/jumpbox-setup.sh](remote/jumpbox-setup.sh) | Bastion (Developer, free), jumpbox VM with no public IP; schema, least-privilege `journal_app` role, `database-url` secret | About $1.50/month, plus $0.013/hour while the jumpbox runs |
 | 5 | [05-registry.sh](05-registry.sh) | Container Registry (Basic, no admin user), pull access for the app's identity; image build, local smoke test, push | About $5/month |
-| 6 | [06-app.sh](06-app.sh), [templates/containerapp.bicep](templates/containerapp.bicep) | Container Apps environment in `snet-app`, the API app (public HTTPS, always on), Key Vault references; app identity narrowed to its two secrets | About $4 to $14/month |
+| 6 | [06-app.sh](06-app.sh), [templates/containerapp.bicep](templates/containerapp.bicep) | Container Apps environment in `snet-app`, the API app (public HTTPS, always on), Key Vault references; app identity narrowed to its two secrets | About $26 to $36/month: the replica ($4–14) plus the environment's load balancer and public IP ($21.90) |
 | 99 | [99-teardown.sh](99-teardown.sh) | Deletes the resource group and everything in it | — |
 
 Costs are pay-as-you-go prices for Central US, taken from the Azure Retail Prices API in November 2026.
@@ -47,7 +47,7 @@ Costs are pay-as-you-go prices for Central US, taken from the Azure Retail Price
 ./infra/00-budget.sh
 ```
 
-This budget covers only this project's resource group. Your existing subscription-wide `Labbing-budget` ($50/month, alerts at 75%, 85% and 90%) still covers everything else, including any AI resources. Once this project runs 24/7 (about $26–37/month), it will be close to `Labbing-budget`'s 75% threshold on its own.
+This budget covers only this project's resource group. Your existing subscription-wide `Labbing-budget` ($50/month, alerts at 75%, 85% and 90%) still covers everything else, including any AI resources. With everything deployed, this project costs about $51–61/month. That's more than this $40 budget and `Labbing-budget` on its own, so tear down when you're not using it (see Tear down).
 
 ## Phase 1: network foundation
 
