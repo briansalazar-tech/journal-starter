@@ -480,4 +480,49 @@ az containerapp logs show -g rg-journal-dev -n $APP --tail 50 --format text
 ./infra/99-teardown.sh
 ```
 
-This deletes the resource group and everything in it, **including all journal data**. You must type the group name to confirm.
+This deletes the resource group and everything in it, **including all journal data**. You must type the group name to confirm. Spending stops once the deletion finishes.
+
+### Before tearing down
+
+1. **Commit everything**, so the repo matches what's deployed.
+2. **Export your journal entries if you want to keep them.** Deleted servers can only be restored for a few days, so after a month the data is gone. Save the export outside the repo; it's your personal writing, not code:
+   ```bash
+   URL="https://$(az containerapp show -g rg-journal-dev -n ca-journal-api --query properties.configuration.ingress.fqdn -o tsv)"
+   curl -s "$URL/entries" > ~/journal-entries-backup.json
+   ```
+3. **Have your AI provider key available for later**: the OpenAI key in your OpenAI dashboard, which stays valid unless you revoke it. Key Vault keeps deleted secrets for only 7 days. After that, phase 2 creates a fresh vault and asks for the key again.
+
+### Redeploy later
+
+Everything is rebuilt from the repo with the same scripts, in order. Plan about an hour, mostly waiting.
+
+```bash
+./infra/00-budget.sh
+./infra/01-foundation.sh   # then "Verify phase 1"; re-run if the DNS link is missing
+./infra/02-secrets.sh      # paste the AI provider key at the prompt
+./infra/03-database.sh
+./infra/04-admin.sh
+./infra/05-registry.sh     # needs Docker running
+./infra/06-app.sh
+```
+
+Run each phase's Verify section before moving on.
+
+- **Within 7 days of the teardown**, phase 2 recovers the old vault, with its passwords and AI key.
+- **After that**, it creates a new vault and generates new passwords. Nothing else depends on the old ones.
+
+What's different after a redeploy:
+
+- **The app's URL changes.** The new environment gets a new random part in `*.azurecontainerapps.io`.
+- **The database starts empty.** To bring back exported entries:
+  ```bash
+  URL="https://$(az containerapp show -g rg-journal-dev -n ca-journal-api --query properties.configuration.ingress.fqdn -o tsv)"
+  python -c "import json,sys; [print(json.dumps({k: e[k] for k in ('work','struggle','intention')})) for e in json.load(sys.stdin)['entries']]" \
+    < ~/journal-entries-backup.json \
+    | while read -r body; do curl -s -X POST "$URL/entries" -H 'Content-Type: application/json' -d "$body" >/dev/null; done
+  ```
+  Re-created entries get new IDs and today's timestamps; the API sets those itself.
+- **Capacity can change.** If phase 3 or 4 hits `SkuNotAvailable` or a quota error again, see "If PostgreSQL isn't available in your region" and the phase 4 notes. You may need to change `LOCATION` or `JUMPBOX_SIZE` in [config.sh](config.sh).
+- **Run 01 right after the teardown finishes?** Background cleanup of the old resources can remove new ones with the same IDs. Wait a few minutes after `az group wait --deleted`, or re-run phase 1 if its Verify fails. After a month, this doesn't apply.
+
+Some things outside the resource group stay and cost nothing: the resource provider registrations, your subscription-wide `Labbing-budget`, and the `NetworkWatcherRG` group Azure creates for VNets. The `ME_cae-journal-dev_...` group belongs to the Container Apps environment, and Azure deletes it along with the environment.
