@@ -72,22 +72,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-assign_role() { # <principal-object-id> <User|ServicePrincipal> <role> <scope> <label>
-  local id=$1 type=$2 role=$3 scope=$4 label=$5
-  local count
-  count="$(az_tsv role assignment list --scope "$scope" \
-    --query "[?principalId=='${id}' && roleDefinitionName=='${role}'] | length(@)")"
-  if [[ $count -gt 0 ]]; then
-    echo "  ${label}: already has ${role}"
-    return
-  fi
-  # --assignee-principal-type skips a directory lookup that can fail for a
-  # just-created identity that hasn't replicated yet.
-  az role assignment create --assignee-object-id "$id" --assignee-principal-type "$type" \
-    --role "$role" --scope "$scope" -o none
-  echo "  ${label}: granted ${role}"
-}
-
 log "Managed identity ${APP_IDENTITY}"
 if az identity show --resource-group "$RG" --name "$APP_IDENTITY" -o none 2>/dev/null; then
   echo "  exists"
@@ -116,18 +100,6 @@ for attempt in $(seq 1 20); do
   [[ $attempt -eq 20 ]] && { echo "  still denied after 5 minutes; re-run this script." >&2; exit 1; }
   sleep 15
 done
-
-secret_exists() {
-  [[ $(az_tsv keyvault secret list --vault-name "$KEY_VAULT" \
-    --query "[?name=='${1}'] | length(@)") -gt 0 ]]
-}
-
-# Store the contents of a file as a secret. The value never appears in argv.
-store_secret() { # <name> <file> <description>
-  az keyvault secret set --vault-name "$KEY_VAULT" --name "$1" \
-    --file "$(native_path "$2")" --encoding utf-8 --description "$3" -o none
-  rm -f "$2"
-}
 
 # 32 random letters and digits. Alphanumeric, so it never needs URL-encoding
 # inside DATABASE_URL, and it meets Azure PostgreSQL's complexity rules

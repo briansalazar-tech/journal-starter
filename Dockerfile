@@ -14,7 +14,9 @@ ARG PYTHON_VERSION=3.14
 # ---- Stage 1: resolve and install dependencies with uv ----------------------
 FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+# Pinned so a rebuild of the same commit uses the same installer. Bump it
+# deliberately (it only resolves what uv.lock already pins).
+COPY --from=ghcr.io/astral-sh/uv:0.12.14 /uv /bin/uv
 
 # Compile .pyc files for faster startup, copy (not hardlink) packages out of
 # the cache mount, and use the image's Python rather than downloading one.

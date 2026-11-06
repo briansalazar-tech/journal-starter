@@ -14,7 +14,7 @@ Internet ──HTTPS──► Container Apps env (snet-app 10.20.0.0/24)
                     PostgreSQL Flexible Server (snet-db 10.20.1.0/28, no public access)
                          ▲
                          │ TCP 5432
-                    jumpbox VM, no public IP (snet-admin 10.20.2.0/29) ◄── Azure Bastion ◄── you (Entra ID)
+                    jumpbox VM, no public IP (snet-admin 10.20.2.0/29) ◄── Azure Bastion ◄── you (Azure portal, Entra ID)
 ```
 
 ## Prerequisites
@@ -33,13 +33,13 @@ Every script prints the subscription, region and action, then asks before it cha
 | 0 | [00-budget.sh](00-budget.sh) | Resource group, plus a $40/month budget on it with email alerts at 50%, 80% and 100% of actual spend and 100% of forecast | Free |
 | 1 | [01-foundation.sh](01-foundation.sh) | Provider registrations, Log Analytics (0.15 GB/day cap), 3 NSGs, VNet and 3 subnets, Postgres private DNS zone | About $0.50/month (the DNS zone) |
 | 2 | [02-secrets.sh](02-secrets.sh) | Key Vault (RBAC, with audit logs), the app's managed identity, generated database passwords, Foundry key | About $0.10/month |
-| 3 | [03-database.sh](03-database.sh), [templates/postgres.bicep](templates/postgres.bicep) | PostgreSQL 17 Flexible Server (B1ms, private access only), `career_journal` database, you as Entra admin | About $16/month |
-| 4 | *next* | Jumpbox VM and Bastion; schema and least-privilege app role | About $0 to $2.50/month |
-| 5 | *planned* | Container Registry; image build | About $5/month |
-| 6 | *planned* | Container Apps environment and app | About $4 to $14/month |
+| 3 | [03-database.sh](03-database.sh), [templates/postgres.bicep](templates/postgres.bicep) | PostgreSQL 17 Flexible Server (B1ms, private access only), `career_journal` database, you as Entra admin | About $17.70/month |
+| 4 | [04-admin.sh](04-admin.sh), [remote/jumpbox-setup.sh](remote/jumpbox-setup.sh) | Bastion (Developer, free), jumpbox VM with no public IP; schema, least-privilege `journal_app` role, `database-url` secret | About $1.50/month, plus $0.013/hour while the jumpbox runs |
+| 5 | [05-registry.sh](05-registry.sh) | Container Registry (Basic, no admin user), pull access for the app's identity; image build, local smoke test, push | About $5/month |
+| 6 | *next* | Container Apps environment and app | About $4 to $14/month |
 | 99 | [99-teardown.sh](99-teardown.sh) | Deletes the resource group and everything in it | — |
 
-Costs are pay-as-you-go prices for East US 2, taken from the Azure Retail Prices API in November 2026.
+Costs are pay-as-you-go prices for Central US, taken from the Azure Retail Prices API in November 2026.
 
 ## Phase 0: before provisioning
 
@@ -69,6 +69,10 @@ az rest --method get \
 az network vnet subnet list -g rg-journal-dev --vnet-name vnet-journal-dev \
   --query "[].{name:name, prefix:addressPrefix, delegation:delegations[0].serviceName}" -o table
 
+# The Postgres private DNS zone is linked to the VNet
+az network private-dns link vnet list -g rg-journal-dev -z journal-dev.private.postgres.database.azure.com \
+  --query "[].{name:name, state:virtualNetworkLinkState}" -o table
+
 # Database-tier rules: 5432 from app and admin subnets only, everything else in the VNet denied
 az network nsg rule list -g rg-journal-dev --nsg-name nsg-journal-dev-db \
   --query "sort_by([], &priority)[].{priority:priority, name:name, access:access, from:sourceAddressPrefix, port:destinationPortRange}" -o table
@@ -76,6 +80,7 @@ az network nsg rule list -g rg-journal-dev --nsg-name nsg-journal-dev-db \
 
 **Expected results:**
 - `snet-app` is delegated to `Microsoft.App/environments`, and `snet-db` to `Microsoft.DBforPostgreSQL/flexibleServers`.
+- The DNS zone has one link, `link-vnet-journal-dev`, in state `Completed`.
 - The database NSG allows 5432 only from `10.20.0.0/24` and `10.20.2.0/29`, and denies the rest of the VNet at priority 4000.
 - None of the NSGs allow inbound internet traffic except the app tier, on ports 80 and 443.
 
@@ -127,7 +132,7 @@ az keyvault secret show --vault-name "$KV" -n pg-admin-password --query "length(
 ./infra/03-database.sh
 ```
 
-**Billing starts in this phase: about $16/month until you tear it down.** The deployment takes 5–15 minutes. To watch it, open the portal and go to **rg-journal-dev → Deployments**.
+**Billing starts in this phase: about $17.70/month until you tear it down.** The deployment takes 5–15 minutes. To watch it, open the portal and go to **rg-journal-dev → Deployments**.
 
 How the script keeps the admin password private:
 - The template's parameters file holds only a reference to the `pg-admin-password` secret. Azure Resource Manager fetches the value from Key Vault itself, so it never passes through your shell.
@@ -172,7 +177,7 @@ timeout 5 bash -c "</dev/tcp/$FQDN/5432" 2>/dev/null && echo "REACHABLE from the
 - The Entra admin is your `...#EXT#@...onmicrosoft.com` name.
 - `nslookup` returns only an alias ending in `.private.postgres.database.azure.com`, with no public IP address, and the connection test prints "Not reachable from the internet (expected)".
 
-If the deployment fails only on the Entra admin step, re-run it with `PG_ENTRA_ADMIN=0 ./infra/03-database.sh`. Phase 4 will then sign in with the password admin instead.
+If the deployment fails only on the Entra admin step, re-run it with `PG_ENTRA_ADMIN=0 ./infra/03-database.sh`. Phase 4 doesn't depend on it: it signs in with the password admin, read from Key Vault.
 
 ### If PostgreSQL isn't available in your region
 
@@ -199,7 +204,7 @@ After a failed attempt, Azure deletes the partly created server; the portal show
    ```bash
    ./infra/99-teardown.sh                    # deletes rg-journal-dev
    az group wait --deleted --resource-group rg-journal-dev
-   # Change LOCATION="${LOCATION:-eastus2}" in infra/config.sh to the new region,
+   # Change the LOCATION="${LOCATION:-...}" default in infra/config.sh to the new region,
    # so every later run uses it.
    ./infra/00-budget.sh
    ./infra/01-foundation.sh
@@ -207,13 +212,167 @@ After a failed attempt, Azure deletes the partly created server; the portal show
    ./infra/03-database.sh
    ```
 
+   Azure can keep deleting the old resources in the background for several minutes after `az group wait` returns. The old and new resources share the same IDs, so this cleanup can remove new ones; once it removed the new DNS zone link. After rebuilding, run "Verify phase 1" again, and re-run `./infra/01-foundation.sh` if anything is missing. It only creates what's missing.
+
    Run phase 2 within 7 days of the teardown. After that, Azure purges the soft-deleted vault and its secrets.
 
    The recovered Key Vault stays in its original region. That's fine: the app reaches it over Azure's network using its managed identity, not through the VNet.
 
+## Phase 4: administration and database setup
+
+```bash
+./infra/04-admin.sh
+```
+
+This takes about 10 minutes. It creates:
+
+- **Azure Bastion, Developer SKU.** It's free, has no public IP, and opens SSH sessions in the Azure portal, so you sign in with your Entra account first. It allows one session at a time.
+- **A jumpbox VM in `snet-admin`** with no public IP and no SSH port open to the internet.
+  - It accepts only an SSH key. The script puts the private key straight into Key Vault as `jumpbox-ssh-key` and deletes the local copy.
+  - It can't use Entra sign-in, because Microsoft doesn't support that for guest accounts like yours.
+- **Read access for the VM's managed identity** to the two database password secrets, and nothing else. This lets it sign in to PostgreSQL without anyone typing or copying a password.
+
+It then sets up the database on the jumpbox through `az vm run-command`. That runs through Azure's control plane, so it needs your Entra sign-in and Azure RBAC, is recorded in the activity log, and needs no inbound port. On the jumpbox, [remote/jumpbox-setup.sh](remote/jumpbox-setup.sh):
+
+1. Installs psql 17 and two helpers:
+   - `kv-secret` reads a secret using the VM's identity.
+   - `journal-psql` opens psql as the server admin, over TLS with certificate and hostname checks.
+2. Applies [database_setup.sql](../database_setup.sql), the same schema the devcontainer uses.
+3. Creates the `journal_app` role. It can connect and read, insert, update and delete rows in `entries`, and nothing else. Only a SCRAM hash of its password is sent to the server, so the password can't end up in server logs or query statistics.
+4. Signs in as `journal_app` and prints what it can and can't do.
+
+Finally, it stores `database-url` in Key Vault for the Container App in phase 6, and deallocates the jumpbox. A deallocated VM costs only its disk. Set `JUMPBOX_KEEP_RUNNING=1` to leave it running. Either way, it shuts itself down daily at 06:00 UTC.
+
+### Verify phase 4
+
+The script's output should end with a block like this:
+
+```text
+connected as:            journal_app
+TLS:                     TLSv1.3
+select/insert/update/delete on entries: true
+can create tables:       false
+can create roles or DBs: false
+is a server admin:       false
+```
+
+Then:
+
+```bash
+export MSYS_NO_PATHCONV=1   # Git Bash only; see Prerequisites
+KV=$(az keyvault list -g rg-journal-dev --query "[0].name" -o tsv)
+VM=vm-journal-dev-admin
+
+# Private IP only, no NSG on the NIC (the snet-admin NSG applies), SSH key login only
+az vm list-ip-addresses -g rg-journal-dev -n $VM \
+  --query "[0].virtualMachine.network.{private:privateIpAddresses[0], public:publicIpAddresses}"
+az network nic list -g rg-journal-dev --query "[].{nic:name, nsg:networkSecurityGroup.id}" -o table
+az vm show -g rg-journal-dev -n $VM --query osProfile.linuxConfiguration.disablePasswordAuthentication
+
+# Bastion is the free Developer SKU
+az rest --method get \
+  --url "https://management.azure.com$(az group show -n rg-journal-dev --query id -o tsv)/providers/Microsoft.Network/bastionHosts/bas-journal-dev?api-version=2024-05-01" \
+  --query "{sku:sku.name, state:properties.provisioningState}"
+
+# The only inbound rules open to the internet are the app tier's 80 and 443
+az network nsg list -g rg-journal-dev \
+  --query "[].{nsg:name, openToInternet:securityRules[?direction=='Inbound' && access=='Allow' && (sourceAddressPrefix=='Internet' || sourceAddressPrefix=='*')].destinationPortRanges[]}"
+
+# The jumpbox's identity can read exactly two secrets
+az role assignment list --all --assignee "$(az vm show -g rg-journal-dev -n $VM --query identity.principalId -o tsv)" \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+
+# Secret names, and database-url with its password masked
+az keyvault secret list --vault-name "$KV" --query "[].name" -o tsv
+az keyvault secret show --vault-name "$KV" -n database-url --query value -o tsv | sed -E 's#://([^:]+):[^@]+@#://\1:****@#'
+
+# Deallocated
+az vm get-instance-view -g rg-journal-dev -n $VM --query "instanceView.statuses[?starts_with(code, 'PowerState/')].displayStatus | [0]"
+```
+
+**Expected results:**
+- `public` is empty (`[]`), and the private IP is in `10.20.2.0/29`. The jumpbox NIC's `nsg` is empty. `disablePasswordAuthentication` is `true`.
+- Bastion shows `sku` `Developer` and `state` `Succeeded`.
+- Only `nsg-journal-dev-app` lists ports (`80`, `443`). The `db` and `admin` NSGs list none.
+- The jumpbox has two `Key Vault Secrets User` rows, with scopes ending in `/secrets/pg-admin-password` and `/secrets/pg-app-password`.
+- The secrets now include `database-url` and `jumpbox-ssh-key`.
+- The masked URL is `postgresql://journal_app:****@psql-journal-dev-d5775.postgres.database.azure.com:5432/career_journal?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca-certificates.crt`.
+- The VM shows `VM deallocated`.
+
+### Connect through Bastion
+
+Use this for interactive database work, and to try the admin path for requirement 3 yourself:
+
+1. Start the jumpbox: `az vm start -g rg-journal-dev -n vm-journal-dev-admin`.
+2. In the portal, open **vm-journal-dev-admin → Connect → Connect via Bastion**.
+3. For **Authentication Type**, choose **SSH Private Key from Azure Key Vault**. Enter username `journalops`, select vault `kv-journal-dev-d5775` and secret `jumpbox-ssh-key`, then select **Connect**.
+4. In the session, run `journal-psql -c '\dt'` and `journal-psql -c '\du journal_app'`, or plain `journal-psql` for an interactive prompt.
+5. Close the tab, then deallocate the VM: `az vm deallocate -g rg-journal-dev -n vm-journal-dev-admin`.
+
+If the connection times out, look at the NIC's **Effective security rules**. Bastion Developer reaches the VM over Azure's platform network, which the `snet-admin` NSG's `Allow-AzureLoadBalancer` rule permits.
+
+## Phase 5: container registry and image
+
+Needs Docker running locally (Docker Desktop on Windows).
+
+```bash
+BUILD_ONLY=1 ./infra/05-registry.sh   # optional: build and smoke-test locally; changes nothing in Azure
+./infra/05-registry.sh
+```
+
+The script creates:
+
+- **A container registry**, `acrjournaldevd5775`. It's the Basic tier, about $5/month. Its admin user is off, so the registry has no password.
+  - You push with your Entra sign-in: `az acr login` exchanges it for a short-lived token.
+  - The app's managed identity gets `AcrPull` on this registry only. Phase 6 uses it to pull the image.
+
+It then builds the image from the repo's [Dockerfile](../Dockerfile) for `linux/amd64` and smoke-tests it locally before pushing. The test runs the image against a throwaway PostgreSQL 17 container. It checks that the API starts as the non-root `app` user, creates an entry, lists it back, and that there's no `.env` in the image. The test containers are removed afterwards. Set `SKIP_SMOKE_TEST=1` to skip it.
+
+Images are tagged with the git commit they were built from:
+
+- **Clean build:** the tag is the commit, for example `eb01feecaa6a`. Re-running with the same commit skips the build.
+- **Uncommitted changes:** if anything that goes into the image has uncommitted changes, the tag becomes `<commit>-dirty-<UTC time>`. That covers `api/`, `pyproject.toml`, `uv.lock`, `Dockerfile` and `.dockerignore`. Commit first if you want a tag that maps to an exact commit.
+
+If TODOs remain in `api/`, the script notes that the image contains unfinished chapter exercises. The image still works for the endpoints that are done. Requirement 5 (full CRUD plus live AI analysis) needs those chapters finished; then re-run this script to build and push the new version.
+
+### Verify phase 5
+
+```bash
+export MSYS_NO_PATHCONV=1   # Git Bash only; see Prerequisites
+ACR=$(az acr list -g rg-journal-dev --query "[0].name" -o tsv)
+
+# Basic, admin user off, anonymous pull off
+az acr show -n "$ACR" --query "{sku:sku.name, adminUser:adminUserEnabled, anonymousPull:anonymousPullEnabled, loginServer:loginServer}"
+
+# Pushed tags, newest first
+az acr repository show-tags -n "$ACR" --repository journal-api --orderby time_desc --detail \
+  --query "[].{tag:name, created:createdTime}" -o table
+
+# One role assignment on the registry: AcrPull for the app identity
+az role assignment list --scope "$(az acr show -n "$ACR" --query id -o tsv)" \
+  --query "[].{who:principalName, type:principalType, role:roleDefinitionName}" -o table
+
+# Without a sign-in, the registry refuses to even list tags
+curl -sI "https://$ACR.azurecr.io/v2/journal-api/tags/list" | head -n 1
+
+# The image records its commit and runs as a non-root user
+TAG=$(az acr repository show-tags -n "$ACR" --repository journal-api --orderby time_desc --top 1 -o tsv)
+docker image inspect "$ACR.azurecr.io/journal-api:$TAG" \
+  --format 'user={{.Config.User}} revision={{index .Config.Labels "org.opencontainers.image.revision"}}'
+```
+
+**Expected results:**
+- `sku` is `Basic`, and `adminUser` and `anonymousPull` are both `false`.
+- The newest tag is the one the script printed.
+- There's one `ServicePrincipal` row with `AcrPull`. Its "who" GUID matches `az identity show -g rg-journal-dev -n id-journal-dev-app --query clientId -o tsv`.
+- `curl` prints `HTTP/1.1 401 Unauthorized`.
+- The image shows `user=app`, and its revision matches `git rev-parse --short=12 HEAD`.
+
 ## Credentials
 
-- Nothing in `infra/` contains a secret. Passwords and keys are generated into Key Vault (phase 2) and are never passed as command-line arguments, which would end up in shell history.
+- Nothing in `infra/` contains a secret. Passwords and keys are generated into Key Vault (phases 2 and 4) and are never passed as command-line arguments, which would end up in shell history.
+- The container registry has no admin user or password. You push with your Entra sign-in, and the app pulls with its managed identity.
+- The jumpbox's SSH private key exists only in Key Vault. The jumpbox reads database passwords with its own managed identity, so nobody types or copies them.
 - `.env` is git-ignored and excluded from the Docker image by `.dockerignore`.
 - The gitleaks hook in [.pre-commit-config.yaml](../.pre-commit-config.yaml) blocks commits that contain credentials. To install it, run `uv run pre-commit install` in the devcontainer, or `uvx pre-commit install` on Windows.
 - [.gitleaksignore](../.gitleaksignore) lists the two reviewed upstream findings in old commits.

@@ -44,6 +44,36 @@ confirm() {
   [[ $reply =~ ^[Yy]$ ]] || { echo "Aborted; nothing was changed."; exit 1; }
 }
 
+# Grant an Azure role unless the principal already has it at that scope.
+assign_role() { # <principal-object-id> <User|ServicePrincipal> <role> <scope> <label>
+  local id=$1 type=$2 role=$3 scope=$4 label=$5
+  local count
+  count="$(az_tsv role assignment list --scope "$scope" \
+    --query "[?principalId=='${id}' && roleDefinitionName=='${role}'] | length(@)")"
+  if [[ $count -gt 0 ]]; then
+    echo "  ${label}: already has ${role}"
+    return
+  fi
+  # --assignee-principal-type skips a directory lookup that can fail for a
+  # just-created identity that hasn't replicated yet.
+  az role assignment create --assignee-object-id "$id" --assignee-principal-type "$type" \
+    --role "$role" --scope "$scope" -o none
+  echo "  ${label}: granted ${role}"
+}
+
+secret_exists() { # <name>
+  [[ $(az_tsv keyvault secret list --vault-name "$KEY_VAULT" \
+    --query "[?name=='${1}'] | length(@)") -gt 0 ]]
+}
+
+# Store the contents of a file as a secret, then delete the file. The value
+# never appears in argv (and so never in shell history or process listings).
+store_secret() { # <name> <file> <description>
+  az keyvault secret set --vault-name "$KEY_VAULT" --name "$1" \
+    --file "$(native_path "$2")" --encoding utf-8 --description "$3" -o none
+  rm -f "$2"
+}
+
 # ---------------------------------------------------------------------------
 # Context
 # ---------------------------------------------------------------------------
@@ -145,10 +175,31 @@ PG_ADMIN_USER="journaladmin"                # password-auth server admin (passwo
 PG_ENTRA_ADMIN="${PG_ENTRA_ADMIN:-1}"
 
 # ---------------------------------------------------------------------------
+# Phase 4: administration
+# ---------------------------------------------------------------------------
+
+BASTION="bas-${PROJECT}-${ENV_NAME}"         # Developer SKU: free, browser sessions from the portal
+JUMPBOX_VM="vm-${PROJECT}-${ENV_NAME}-admin"
+JUMPBOX_SIZE="${JUMPBOX_SIZE:-Standard_B1s}"  # 1 vCPU, 1 GiB, ~$0.013/hour while running (B-series v1 quota)
+JUMPBOX_IMAGE="Ubuntu2404"
+JUMPBOX_ADMIN="journalops"                  # Linux login; SSH key only, kept in Key Vault
+JUMPBOX_SHUTDOWN_UTC="0600"                 # daily auto-shutdown backstop (around midnight US Central)
+PG_CLIENT_VERSION="17"                      # psql version installed on the jumpbox
+PG_APP_USER="journal_app"                   # least-privilege role the API connects as
+SECRET_JUMPBOX_SSH_KEY="jumpbox-ssh-key"    # private key for Bastion connections
+
+# ---------------------------------------------------------------------------
+# Phase 5: container registry and image
+# ---------------------------------------------------------------------------
+
+ACR="acr${PROJECT}${ENV_NAME}${SUFFIX}"     # globally unique, letters and digits only
+ACR_SKU="Basic"                             # ~$5/month, 10 GB included
+IMAGE_REPO="journal-api"
+IMAGE_PLATFORM="linux/amd64"                # what Container Apps runs
+
+# ---------------------------------------------------------------------------
 # Names reserved for later phases (nothing creates these yet)
 # ---------------------------------------------------------------------------
 
-JUMPBOX_VM="vm-${PROJECT}-${ENV_NAME}-admin"
-ACR="acr${PROJECT}${ENV_NAME}${SUFFIX}"
 ACA_ENV="cae-${PROJECT}-${ENV_NAME}"
 ACA_APP="ca-${PROJECT}-api"
