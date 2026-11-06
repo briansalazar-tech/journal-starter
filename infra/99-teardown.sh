@@ -4,7 +4,7 @@
 # This is permanent and includes the PostgreSQL server and all journal data
 # (and the resource-group budget). You must type the group name to confirm.
 #
-# Not deleted: the subscription-wide budget, your Foundry (AI) resource, and
+# Not deleted: the subscription-wide budget, any AI resources outside this group, and
 # resource provider registrations (they are free).
 
 # shellcheck source=config.sh

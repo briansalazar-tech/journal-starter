@@ -117,7 +117,7 @@ subnet() { # <name> <cidr> <nsg> [delegation]
   local args=(--resource-group "$RG" --vnet-name "$VNET" --name "$name"
               --address-prefixes "$cidr" --network-security-group "$nsg"
               # Azure is moving new subnets to "private" (no implicit internet
-              # egress). Be explicit: the app must reach ACR and Foundry, the
+              # egress). Be explicit: the app must reach ACR and the AI API, the
               # jumpbox must install psql, and PostgreSQL must reach Azure
               # Storage for backups. Inbound is unaffected (NSGs above).
               --default-outbound-access true)

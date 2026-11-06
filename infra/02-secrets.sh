@@ -5,19 +5,21 @@
 #   - a Key Vault that uses Azure RBAC (Entra ID) for access, with audit logs
 #     sent to the phase 1 Log Analytics workspace
 #   - "Key Vault Secrets Officer" for you, on this vault only
-#   - a user-assigned managed identity for the API, with "Key Vault Secrets
-#     User" (read-only) on this vault only; the Container App uses it in phase 6
+#   - a user-assigned managed identity for the API. Phase 5 lets it pull from
+#     the registry; phase 6 lets it read exactly two secrets (database-url and
+#     openai-api-key), not the whole vault
 #   - secrets:
 #       pg-admin-password  generated: PostgreSQL server admin (phase 3)
 #       pg-app-password    generated: least-privilege journal_app role (phase 4)
-#       openai-api-key     you paste it at a hidden prompt (can skip and re-run later)
+#       openai-api-key     your AI provider's API key (OpenAI, or Azure AI Foundry),
+#                          pasted at a hidden prompt (can skip and re-run later)
 #
 # Requirement #3: secret values are never printed, never passed as command-line
 # arguments (they'd land in shell history), and never written inside the repo.
 # They pass through a private temp file that is deleted immediately.
 #
 # Safe to re-run: existing secrets are kept, never silently rotated (rotating
-# a database password here would lock the app out). To replace the Foundry key:
+# a database password here would lock the app out). To replace the AI API key:
 #   ROTATE_OPENAI_KEY=1 ./infra/02-secrets.sh
 
 # shellcheck source=config.sh
@@ -29,7 +31,7 @@ if ! az network vnet show --resource-group "$RG" --name "$VNET" -o none 2>/dev/n
 fi
 
 echo "Key Vault    : ${KEY_VAULT} (RBAC, ${KV_SOFT_DELETE_DAYS}-day soft delete, audit logs on)"
-echo "Identity     : ${APP_IDENTITY} (read-only access to secrets)"
+echo "Identity     : ${APP_IDENTITY} (for the app; secret access is granted per secret in phase 6)"
 confirm "create Key Vault, managed identity and secrets in ${RG}"
 
 # Private scratch directory for secret values in transit; always removed.
@@ -80,14 +82,13 @@ else
     --tags "${TAGS[@]}" -o none
   echo "  created"
 fi
-APP_PRINCIPAL_ID="$(az_tsv identity show --resource-group "$RG" --name "$APP_IDENTITY" --query principalId)"
-
-log "Key Vault access (scoped to this vault only)"
+log "Key Vault access for you (this vault only)"
 # Being subscription Owner lets you manage the vault but NOT read or write its
 # secrets; under RBAC that is a separate, explicit data-plane role.
+# The app identity gets nothing here: phase 6 grants it read access to just
+# the two secrets it needs, once they both exist.
 ME_ID="$(az_tsv ad signed-in-user show --query id)"
-assign_role "$ME_ID"            User             "Key Vault Secrets Officer" "$KV_ID" "you"
-assign_role "$APP_PRINCIPAL_ID" ServicePrincipal "Key Vault Secrets User"    "$KV_ID" "$APP_IDENTITY"
+assign_role "$ME_ID" User "Key Vault Secrets Officer" "$KV_ID" "you"
 
 # ---------------------------------------------------------------------------
 log "Waiting for your Key Vault role to take effect"
@@ -131,7 +132,7 @@ else
   # Hidden prompt: the key is not echoed and not saved in shell history.
   key=""
   if [[ -t 0 ]]; then
-    read -r -s -p "  Paste your Foundry API key (input hidden, Enter to skip): " key
+    read -r -s -p "  Paste your AI provider API key (input hidden, Enter to skip): " key
     echo
   fi
   if [[ -z $key ]]; then

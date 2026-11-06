@@ -8,7 +8,7 @@
 #
 # Budgets only notify; they never stop resources. Cost data lags 8-24 hours.
 # The subscription-wide budget you already have keeps covering everything else,
-# including the Foundry (AI) resource that lives outside this group.
+# including any AI resources that live outside this group.
 #
 # Safe to re-run: it updates the same budget in place.
 

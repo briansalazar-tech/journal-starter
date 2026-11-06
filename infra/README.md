@@ -32,11 +32,11 @@ Every script prints the subscription, region and action, then asks before it cha
 |---|---|---|---|
 | 0 | [00-budget.sh](00-budget.sh) | Resource group, plus a $40/month budget on it with email alerts at 50%, 80% and 100% of actual spend and 100% of forecast | Free |
 | 1 | [01-foundation.sh](01-foundation.sh) | Provider registrations, Log Analytics (0.15 GB/day cap), 3 NSGs, VNet and 3 subnets, Postgres private DNS zone | About $0.50/month (the DNS zone) |
-| 2 | [02-secrets.sh](02-secrets.sh) | Key Vault (RBAC, with audit logs), the app's managed identity, generated database passwords, Foundry key | About $0.10/month |
+| 2 | [02-secrets.sh](02-secrets.sh) | Key Vault (RBAC, with audit logs), the app's managed identity, generated database passwords, AI provider API key | About $0.10/month |
 | 3 | [03-database.sh](03-database.sh), [templates/postgres.bicep](templates/postgres.bicep) | PostgreSQL 17 Flexible Server (B1ms, private access only), `career_journal` database, you as Entra admin | About $17.70/month |
 | 4 | [04-admin.sh](04-admin.sh), [remote/jumpbox-setup.sh](remote/jumpbox-setup.sh) | Bastion (Developer, free), jumpbox VM with no public IP; schema, least-privilege `journal_app` role, `database-url` secret | About $1.50/month, plus $0.013/hour while the jumpbox runs |
 | 5 | [05-registry.sh](05-registry.sh) | Container Registry (Basic, no admin user), pull access for the app's identity; image build, local smoke test, push | About $5/month |
-| 6 | *next* | Container Apps environment and app | About $4 to $14/month |
+| 6 | [06-app.sh](06-app.sh), [templates/containerapp.bicep](templates/containerapp.bicep) | Container Apps environment in `snet-app`, the API app (public HTTPS, always on), Key Vault references; app identity narrowed to its two secrets | About $4 to $14/month |
 | 99 | [99-teardown.sh](99-teardown.sh) | Deletes the resource group and everything in it | — |
 
 Costs are pay-as-you-go prices for Central US, taken from the Azure Retail Prices API in November 2026.
@@ -47,7 +47,7 @@ Costs are pay-as-you-go prices for Central US, taken from the Azure Retail Price
 ./infra/00-budget.sh
 ```
 
-This budget covers only this project's resource group. Your existing subscription-wide `Labbing-budget` ($50/month, alerts at 75%, 85% and 90%) still covers everything else, including the Foundry resource. Once this project runs 24/7 (about $26–37/month), it will be close to `Labbing-budget`'s 75% threshold on its own.
+This budget covers only this project's resource group. Your existing subscription-wide `Labbing-budget` ($50/month, alerts at 75%, 85% and 90%) still covers everything else, including any AI resources. Once this project runs 24/7 (about $26–37/month), it will be close to `Labbing-budget`'s 75% threshold on its own.
 
 ## Phase 1: network foundation
 
@@ -90,7 +90,7 @@ az network nsg rule list -g rg-journal-dev --nsg-name nsg-journal-dev-db \
 ./infra/02-secrets.sh
 ```
 
-The script asks for your Foundry API key at a hidden prompt. The Foundry portal shows it under your resource's **Keys and Endpoint** page. Press Enter to skip; re-run the script to add the key later, or use `ROTATE_OPENAI_KEY=1 ./infra/02-secrets.sh` to replace it.
+The script asks for your AI provider's API key at a hidden prompt: an OpenAI key (`sk-...`), or an Azure AI Foundry key from your resource's **Keys and Endpoint** page. The endpoint and model go in `OPENAI_BASE_URL` and `OPENAI_MODEL` in [config.sh](config.sh). Press Enter to skip; re-run the script to add the key later, or use `ROTATE_OPENAI_KEY=1 ./infra/02-secrets.sh` to replace it.
 
 ### Verify phase 2
 
@@ -103,12 +103,10 @@ KV=$(az keyvault list -g rg-journal-dev --query "[0].name" -o tsv)
 az keyvault show -n "$KV" \
   --query "{rbac:properties.enableRbacAuthorization, softDeleteDays:properties.softDeleteRetentionInDays}"
 
-# Exactly two role assignments on the vault: you (Officer) and the app identity (User)
+# One role assignment on the vault as a whole: you (Officer). The app identity
+# gets read access to individual secrets later (phase 6), not to the vault.
 az role assignment list --scope "$(az keyvault show -n "$KV" --query id -o tsv)" \
   --query "[].{who:principalName, principalType:principalType, role:roleDefinitionName}" -o table
-
-# The ServicePrincipal row's "who" is the app identity's client ID; this prints the same GUID
-az identity show -g rg-journal-dev -n id-journal-dev-app --query clientId -o tsv
 
 # Secret names (no values)
 az keyvault secret list --vault-name "$KV" --query "[].name" -o tsv
@@ -119,10 +117,9 @@ az keyvault secret show --vault-name "$KV" -n pg-admin-password --query "length(
 
 **Expected results:**
 - `rbac` is `true` and `softDeleteDays` is `7`.
-- There are two role assignments:
-  - a `User` row: you, shown as your guest name (`...#EXT#@...onmicrosoft.com`), with `Key Vault Secrets Officer`
-  - a `ServicePrincipal` row: a GUID that matches the `clientId` command's output, with `Key Vault Secrets User`
-- You see three secret names (two if you skipped the Foundry key).
+- There's one role assignment: a `User` row for you, shown as your guest name (`...#EXT#@...onmicrosoft.com`), with `Key Vault Secrets Officer`.
+  - If you set this up before phase 6 existed, you'll also see a `ServicePrincipal` row with `Key Vault Secrets User`. That's the app identity's old vault-wide access, which phase 6 replaces with access to two secrets.
+- You see three secret names (two if you skipped the AI key).
 - Each password length prints as `32`.
 - Your shell history doesn't contain any of the secret values.
 
@@ -367,6 +364,106 @@ docker image inspect "$ACR.azurecr.io/journal-api:$TAG" \
 - There's one `ServicePrincipal` row with `AcrPull`. Its "who" GUID matches `az identity show -g rg-journal-dev -n id-journal-dev-app --query clientId -o tsv`.
 - `curl` prints `HTTP/1.1 401 Unauthorized`.
 - The image shows `user=app`, and its revision matches `git rev-parse --short=12 HEAD`.
+
+## Phase 6: the app tier
+
+```bash
+WHAT_IF=1 ./infra/06-app.sh   # optional: preview; changes nothing
+./infra/06-app.sh
+```
+
+This takes 5–10 minutes the first time, mostly creating the environment. It creates:
+
+- **A Container Apps environment**, `cae-journal-dev`, in `snet-app`. It uses workload profiles with the Consumption profile only, so you pay per use with no plan fee. App and system logs go to `log-journal-dev`.
+- **The API app**, `ca-journal-api`:
+  - It runs the newest image in the registry. Set `IMAGE_TAG=<tag>` to choose a different one.
+  - It has one always-on replica of 0.25 vCPU / 0.5 GiB, and scales up to 3 under load.
+  - `DATABASE_URL` and `OPENAI_API_KEY` are Key Vault references. Container Apps reads them with the app's managed identity and re-reads them every 30 minutes, so rotating a secret needs no redeploy.
+  - `OPENAI_BASE_URL` and `OPENAI_MODEL` are plain settings from [config.sh](config.sh).
+
+It also narrows the app identity's vault access to exactly `database-url` and `openai-api-key`. Earlier versions of phase 2 gave it read access to the whole vault, which includes the admin password and SSH key. The script removes that once the app is running.
+
+Finally, it checks the app from the internet: `/docs` over HTTPS, the certificate, the HTTP redirect, and `GET /entries`.
+
+To deploy a new image later, run phase 5, then this script again. Each new image becomes a new revision, and the old one is replaced once the new one passes its startup probe.
+
+### Verify phase 6: all five requirements
+
+```bash
+export MSYS_NO_PATHCONV=1   # Git Bash only; see Prerequisites
+APP=ca-journal-api
+URL="https://$(az containerapp show -g rg-journal-dev -n $APP --query properties.configuration.ingress.fqdn -o tsv)"
+echo "$URL"
+```
+
+**1. Public HTTPS with a trusted certificate**
+
+```bash
+curl -sI "$URL/docs" | head -n 1                                    # HTTP/1.1 200 OK (curl checks the certificate)
+curl -sI "${URL/https:/http:}/docs" | grep -i -E "^HTTP|^location"  # a redirect to https://
+openssl s_client -connect "${URL#https://}:443" -servername "${URL#https://}" </dev/null 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -enddate
+```
+
+**2. PostgreSQL accepts the app tier, not the internet**
+
+```bash
+curl -s "$URL/entries" | head -c 300; echo                          # 200 with JSON: the app reaches the database
+az containerapp show -g rg-journal-dev -n $APP --query "properties.outboundIpAddresses" -o tsv
+PGHOST=$(az postgres flexible-server list -g rg-journal-dev --query "[0].fullyQualifiedDomainName" -o tsv)
+timeout 5 bash -c "</dev/tcp/$PGHOST/5432" 2>/dev/null && echo "REACHABLE (bad)" || echo "Not reachable from the internet (expected)"
+```
+
+**3. Credentials stay out of source control, config and logs**
+
+```bash
+# The app's secrets are Key Vault references; no value in its configuration
+az containerapp show -g rg-journal-dev -n $APP \
+  --query "{secrets:properties.configuration.secrets[].{name:name, keyVaultUrl:keyVaultUrl}, registries:properties.configuration.registries[].{server:server, identity:identity}}"
+az containerapp show -g rg-journal-dev -n $APP --query "properties.template.containers[0].env" -o table
+
+# The app identity: AcrPull on the registry, and read access to exactly two secrets
+az role assignment list --all --assignee "$(az identity show -g rg-journal-dev -n id-journal-dev-app --query principalId -o tsv)" \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+
+# Nothing secret in the repo: the gitleaks hook, run over every tracked file
+uvx pre-commit run gitleaks --all-files      # in the devcontainer: uv run pre-commit run gitleaks --all-files
+```
+
+**4. Keeps running after you sign out; data survives restarts**
+
+```bash
+az containerapp show -g rg-journal-dev -n $APP --query "properties.template.scale.{min:minReplicas, max:maxReplicas}"
+
+# Write an entry, restart the app, read it back
+curl -s -X POST "$URL/entries" -H 'Content-Type: application/json' \
+  -d '{"work": "Deployed to Azure", "struggle": "Regional capacity", "intention": "Verify persistence"}'; echo
+az containerapp revision restart -g rg-journal-dev -n $APP \
+  --revision "$(az containerapp show -g rg-journal-dev -n $APP --query properties.latestRevisionName -o tsv)"
+sleep 60
+curl -s "$URL/entries" | grep -o '"Deployed to Azure"' && echo "entry survived the restart"
+```
+
+Close your terminal, sign out of Azure (`az logout`), and open `$URL/docs` in a browser from your phone. It still answers.
+
+**5. CRUD and live AI analysis**
+
+Open `$URL/docs` and work through each endpoint with **Try it out**: create, list, get by ID, update, delete, and `POST /entries/{entry_id}/analyze`. Each should behave as it does locally. The analyze call reaches your AI provider for real, so it uses a small amount of your API credit.
+
+Endpoints whose chapter exercise isn't finished yet behave as they do locally before you finish them. After you complete a chapter, ship it with `./infra/05-registry.sh` followed by `./infra/06-app.sh`.
+
+To see the app's logs:
+
+```bash
+az containerapp logs show -g rg-journal-dev -n $APP --tail 50 --format text
+```
+
+**Expected results:**
+1. `/docs` returns `200 OK` over HTTPS. Plain HTTP returns a redirect (`301`) with a `location: https://...` header. The certificate's subject is `*.<environment>.centralus.azurecontainerapps.io`, issued by a Microsoft public CA, and it hasn't expired.
+2. `/entries` returns JSON. The database connection test from your machine prints "Not reachable from the internet (expected)".
+3. Each secret has a `keyVaultUrl` and no value. `DATABASE_URL` and `OPENAI_API_KEY` show a `secretRef`, not a value. The identity has three rows: `AcrPull` on the registry, and `Key Vault Secrets User` on `.../secrets/database-url` and on `.../secrets/openai-api-key`. Nothing at the vault level. gitleaks prints `Passed`.
+4. `min` is `1`. The entry is still there after the restart.
+5. Every endpoint matches its local behaviour, and analyze returns a real analysis.
 
 ## Credentials
 

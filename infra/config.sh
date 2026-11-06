@@ -151,7 +151,7 @@ APP_IDENTITY="id-${PROJECT}-${ENV_NAME}-app"
 # Secret names in Key Vault. Values are generated or prompted for, never stored here.
 SECRET_PG_ADMIN_PASSWORD="pg-admin-password"   # server admin login (phase 3)
 SECRET_PG_APP_PASSWORD="pg-app-password"       # least-privilege journal_app role (phase 4)
-SECRET_OPENAI_API_KEY="openai-api-key"         # Foundry key for /analyze (phase 6)
+SECRET_OPENAI_API_KEY="openai-api-key"         # AI provider key for /analyze (phase 6)
 SECRET_DATABASE_URL="database-url"             # assembled in phase 4, read by the app
 
 # ---------------------------------------------------------------------------
@@ -198,8 +198,16 @@ IMAGE_REPO="journal-api"
 IMAGE_PLATFORM="linux/amd64"                # what Container Apps runs
 
 # ---------------------------------------------------------------------------
-# Names reserved for later phases (nothing creates these yet)
+# Phase 6: Container Apps
 # ---------------------------------------------------------------------------
 
+# AI provider the API calls for /entries/{id}/analyze. Not secret; the key is
+# the openai-api-key secret in Key Vault. Defaults match the local .env.
+OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+OPENAI_MODEL="${OPENAI_MODEL:-gpt-6-luna}"
+ACA_CPU="0.25"                              # vCPU per replica
+ACA_MEMORY="0.5Gi"                          # must pair with CPU: 0.25 / 0.5Gi, 0.5 / 1Gi, ...
+ACA_MIN_REPLICAS=1                          # requirement #4: always running
+ACA_MAX_REPLICAS=3                          # x 10 pooled connections each, within B1ms limits
 ACA_ENV="cae-${PROJECT}-${ENV_NAME}"
 ACA_APP="ca-${PROJECT}-api"
