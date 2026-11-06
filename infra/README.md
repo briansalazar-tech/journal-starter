@@ -330,7 +330,7 @@ Images are tagged with the git commit they were built from:
 - **Clean build:** the tag is the commit, for example `eb01feecaa6a`. Re-running with the same commit skips the build.
 - **Uncommitted changes:** if anything that goes into the image has uncommitted changes, the tag becomes `<commit>-dirty-<UTC time>`. That covers `api/`, `pyproject.toml`, `uv.lock`, `Dockerfile` and `.dockerignore`. Commit first if you want a tag that maps to an exact commit.
 
-If TODOs remain in `api/`, the script notes that the image contains unfinished chapter exercises. The image still works for the endpoints that are done. Requirement 5 (full CRUD plus live AI analysis) needs those chapters finished; then re-run this script to build and push the new version.
+If a starter stub is still active in `api/` (an uncommented `501 Not implemented` or `NotImplementedError`), the script notes which files have one. Those endpoints would fail in Azure too. The leftover `TODO` instruction comments don't count; they stay in place after an exercise is done.
 
 ### Verify phase 5
 
@@ -450,7 +450,7 @@ Close your terminal, sign out of Azure (`az logout`), and open `$URL/docs` in a 
 
 Open `$URL/docs` and work through each endpoint with **Try it out**: create, list, get by ID, update, delete, and `POST /entries/{entry_id}/analyze`. Each should behave as it does locally. The analyze call reaches your AI provider for real, so it uses a small amount of your API credit.
 
-Endpoints whose chapter exercise isn't finished yet behave as they do locally before you finish them. After you complete a chapter, ship it with `./infra/05-registry.sh` followed by `./infra/06-app.sh`.
+To ship code changes, run `./infra/05-registry.sh` followed by `./infra/06-app.sh`.
 
 To see the app's logs:
 

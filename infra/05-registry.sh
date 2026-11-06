@@ -70,13 +70,15 @@ else
   confirm "create the registry in ${RG}, then build, test and push the image"
 fi
 
-# Unfinished chapter exercises still build and run; they just aren't done.
-# Requirement #5 (CRUD + live AI analysis) needs them finished.
-todo_files="$(grep -rl --include='*.py' 'TODO' "$REPO_ROOT/api" 2>/dev/null | sed "s#^${REPO_ROOT}/##" | paste -sd' ' || true)"
-if [[ -n $todo_files ]]; then
+# An exercise is unfinished while its starter stub is still active: an
+# uncommented 501 "Not implemented" or NotImplementedError. (TODO comments stay
+# behind as instructions after an exercise is done, so they prove nothing.)
+stub_files="$(grep -rlE --include='*.py' '^\s*raise (HTTPException\(status_code=501|NotImplementedError)' api 2>/dev/null \
+  | paste -sd' ' || true)"
+if [[ -n $stub_files ]]; then
   echo
-  echo "Note: TODOs remain in ${todo_files}."
-  echo "      This image will include those unfinished parts. Rebuild after you finish the chapters."
+  echo "Note: starter stubs are still active in ${stub_files}."
+  echo "      Those endpoints will answer 501/500 in Azure too. Rebuild after you finish them."
 fi
 
 SMOKE_NET="journal-smoke-$$"
