@@ -128,9 +128,11 @@ Go to **Virtual networks → Create**.
 | `snet-db` | `10.20.1.0/28` | `Microsoft.DBforPostgreSQL/flexibleServers` | `nsg-journal-dev-db` |
 | `snet-admin` | `10.20.2.0/29` | none | `nsg-journal-dev-admin` |
 
-On each subnet, leave **Enable private subnet** unchecked. That keeps default outbound access, which the jumpbox and the app need to reach the internet.
+On each subnet, **uncheck Enable private subnet (no default outbound access)**. The portal checks it by default for new virtual networks. Left checked, nothing in the subnet can reach the internet: the jumpbox can't install psql, and the app can't pull its image or reach OpenAI. The scripts turn it off with `--default-outbound-access true`.
 
 **Concept:** delegating a subnet hands it to one service, which then manages the network setup inside it. Container Apps and PostgreSQL private access both require a delegated subnet of their own.
+
+"Default outbound access" is Azure's built-in route to the internet for VMs without a public IP. Microsoft is retiring it, which is why new subnets now start private. The production replacement is a NAT gateway, at about $32 a month plus its IP. For a lab, default outbound access is free and fine.
 
 ### Private DNS zone
 
@@ -331,6 +333,14 @@ psql --version        # psql (PostgreSQL) 17.x
 
 Ubuntu 24.04 ships psql 16. The PostgreSQL project's own apt repository provides 17, to match the server.
 
+If `apt-get` says `Could not connect to azure.archive.ubuntu.com:80 ... connection timed out`, `snet-admin` is a private subnet with no route to the internet. To fix it:
+
+1. Stop (deallocate) the VM.
+2. Go to **vnet-journal-dev → Subnets → snet-admin**, uncheck **Enable private subnet**, and select **Save**. Do the same for `snet-app` while you're there.
+3. Start the VM and reconnect.
+
+Existing VMs only pick up the change after a deallocate and start. To test before installing, run `curl -sI http://azure.archive.ubuntu.com/ubuntu/ | head -n 1`, which should print `HTTP/1.1 200 OK`.
+
 ### Apply the schema as the server admin
 
 ```bash
@@ -349,18 +359,34 @@ At the `career_journal=>` prompt, paste the three `CREATE` statements from [data
 
 ### Create the least-privilege app role
 
-Still in psql:
+Still in psql, run these one step at a time. Don't paste them as one block: `\password` reads its two prompts from whatever comes next, so pasted lines after it would be taken as the password.
 
 ```sql
 CREATE ROLE journal_app LOGIN;
+```
+
+```sql
 \password journal_app
+```
+
+At the two `\password` prompts, paste `pg-app-password`. Then:
+
+```sql
 GRANT CONNECT ON DATABASE career_journal TO journal_app;
 GRANT USAGE ON SCHEMA public TO journal_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE entries TO journal_app;
-\q
 ```
 
-At the `\password` prompts, paste `pg-app-password` twice.
+Before you leave psql, check what you created:
+
+```sql
+\du journal_app
+\dp entries
+```
+
+`\du` should list `journal_app` with an empty Attributes column: it can log in, but it isn't a superuser and can't create roles or databases. `\dp` should show `journal_app=arwd/journaladmin` in the access privileges column. Those letters stand for insert (a), select (r), update (w) and delete (d).
+
+Then leave psql with `\q`. Your prompt should change back from `career_journal=>` to the shell's `journalops@vm-journal-dev-admin:~$`.
 
 **Concept:** `\password` hashes the password on your side, using SCRAM-SHA-256, and sends only the hash to the server. The plain password never appears in a SQL statement, server log or query statistics. The scripts do the same thing in [remote/jumpbox-setup.sh](remote/jumpbox-setup.sh).
 
@@ -376,7 +402,9 @@ psql -U journal_app -c "SELECT current_user,
 psql -U journal_app -c "CREATE TABLE sneaky (x int);"
 ```
 
-Paste `pg-app-password` at the prompts.
+Run these from the shell prompt, not from inside psql. Paste `pg-app-password` at the prompts.
+
+If nothing at all comes back, you're probably still inside psql. psql treats the pasted `psql -U ...` lines as an unfinished SQL statement and waits for more, with a prompt like `career_journal">` or `career_journal->`. Press **Ctrl+C** to clear it, type `\q`, and run the commands again.
 
 The first command should print `journal_app | t | f | f`. The second should fail with `permission denied for schema public`.
 
