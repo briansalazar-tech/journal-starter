@@ -1,0 +1,35 @@
+# Journal API image (pip + requirements.txt).
+#
+# requirements.txt is generated from uv.lock. Re-run this whenever you
+# change dependencies in pyproject.toml:
+#   uv export --format requirements-txt --no-dev --no-hashes --no-emit-project > requirements.txt
+#
+# Build:  docker build -t journal-api .
+# Run:    docker run --rm -p 8000:8000 --env-file .env journal-api
+
+# Must satisfy requires-python in pyproject.toml (>=3.14).
+FROM python:3.14-slim
+
+# Don't write .pyc files, and send stdout/stderr (your logs) straight out.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Dependencies first: this layer is cached until requirements.txt changes,
+# so editing code doesn't trigger a full reinstall.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Run as an unprivileged user rather than root.
+RUN useradd --system --no-create-home app
+
+# Only the application package is needed at runtime.
+COPY --chown=app:app api ./api
+
+USER app
+
+EXPOSE 8000
+
+# api.main:app = the `app` object in api/main.py.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
